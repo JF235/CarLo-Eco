@@ -224,7 +224,7 @@ ISR(PCINT2_vect)
   {
     // Terminou de medir a distância
     distancia = (Vsom * contador_medida * 50) / 20000;
-    threshold = (distancia-15)*(200)/3;
+    threshold = (distancia - 15) * (200) / 3;
     msg_dist[0] = (char)(distancia / 100 + 0x30);
     msg_dist[1] = (char)((distancia / 10) % 10 + 0x30);
     msg_dist[2] = (char)(distancia % 10 + 0x30);
@@ -297,7 +297,17 @@ ISR(TIMER0_COMPA_vect)
     // 45cm -> 10hz
     // 75cm -> 5hz
     // 315cm -> 1hz
-    PORTC ^= 0b100000;
+    
+    if (distancia < 20)
+    {
+      // Deixa o bit aceso
+      PORTC |= 0b100000;
+    }
+    else
+    {
+      // Toggle bit do led
+      PORTC ^= 0b100000;
+    }
     contador_led = 0;
   }
 }
@@ -309,7 +319,7 @@ void config(void)
   // Configuração GPIO (Led)
   // Pino A5
   DDRC |= 0b100000;
-  
+
   // Configuração GPIO (Motor)
   // A1, A2, A3 e A4 controlam o motor
   DDRC |= 0b11110;
@@ -350,13 +360,15 @@ void config(void)
 
 int main()
 {
-  
+
   config();
 
   while (1)
   {
     // Verifica se tem obstáculo
-    if (comando == 'w' && distancia <= 25)
+    // Está indo para frente quando
+    char frente = (*portc & 0b11110) ^ FRENTE;
+    if (frente == 0 && distancia <= 25 && comando != 'X')
     {
       comando = 'X';
       flag_comando = 1;
