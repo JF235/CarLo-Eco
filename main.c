@@ -1,5 +1,7 @@
 #include <avr/io.h>
 #include <avr/interrupt.h>
+#define F_CPU 16000000UL
+#include <util/delay.h>
 
 #define Vsom 343
 
@@ -129,6 +131,8 @@ volatile unsigned int contador_dist = 0;    // base de tempo para medida de dist
 // Controle do Led
 volatile unsigned long contador_led = 0;
 
+volatile unsigned long threshold = 0;
+
 void executar_comando()
 {
   switch (comando)
@@ -220,6 +224,7 @@ ISR(PCINT2_vect)
   {
     // Terminou de medir a distância
     distancia = (Vsom * contador_medida * 50) / 20000;
+    threshold = (distancia-15)*(200)/3;
     msg_dist[0] = (char)(distancia / 100 + 0x30);
     msg_dist[1] = (char)((distancia / 10) % 10 + 0x30);
     msg_dist[2] = (char)(distancia % 10 + 0x30);
@@ -286,7 +291,7 @@ ISR(TIMER0_COMPA_vect)
     PORTC |= 1;
     contador_dist = 0;
   }
-  if (contador_led >= (distancia-15)*(200)/3)
+  if (contador_led >= threshold)
   {
     // 25cm -> 30hz
     // 45cm -> 10hz
@@ -345,6 +350,7 @@ void config(void)
 
 int main()
 {
+  
   config();
 
   while (1)
