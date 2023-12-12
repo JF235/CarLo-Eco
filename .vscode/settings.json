@@ -1,0 +1,11 @@
+{
+    "C_Cpp.intelliSenseEngine": "Tag Parser",
+    "C_Cpp.default.browse.path": [
+        "${workspaceFolder}/**",
+        "C:/Users/jfcmp/AppData/Local/Arduino15/packages/arduino/tools/avr-gcc/7.3.0-atmel3.6.1-arduino7/avr/include/**",
+    ],
+    "files.associations": {
+        "interrupt.h": "c",
+        "io.h": "c"
+    }
+}
