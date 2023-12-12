@@ -123,6 +123,7 @@ volatile unsigned int msg_idx = 0;      // índice do último caractere enviado
 volatile unsigned long distancia = 0;       // distância em centímetros
 volatile unsigned long contador_medida = 0; // contagens durante a medida de distancia
 volatile unsigned int contador_dist = 0;    // base de tempo para medida de distancia
+volatile unsigned char flag_echo = 0;
 
 // Controle do Led
 volatile unsigned long contador_led = 0;
@@ -141,12 +142,7 @@ ISR(PCINT2_vect)
   }
   else
   {
-    // Terminou de medir a distância
-    distancia = (Vsom * contador_medida * 50) / 20000;
-    threshold = (distancia - 15) * (200) / 3;
-    msg_dist[0] = (char)(distancia / 100 + 0x30);
-    msg_dist[1] = (char)((distancia / 10) % 10 + 0x30);
-    msg_dist[2] = (char)(distancia % 10 + 0x30);
+    flag_echo = 1;
   }
 }
 
@@ -190,7 +186,10 @@ ISR(TIMER0_COMPA_vect)
 
   // Base de tempo da medida de dist.
   contador_dist++;
-  contador_medida++;
+  if (!flag_echo)
+  {
+    contador_medida++;
+  }
   PORTC &= ~(0b1); // Desliga trigger
 
   // Base de tempo para o LED
@@ -216,7 +215,7 @@ ISR(TIMER0_COMPA_vect)
     // 45cm -> 10hz
     // 75cm -> 5hz
     // 315cm -> 1hz
-    
+
     if (distancia < 20)
     {
       // Deixa o bit aceso
@@ -284,6 +283,17 @@ int main()
 
   while (1)
   {
+    if (flag_echo)
+    {
+      // Terminou de medir a distância
+      distancia = (Vsom * contador_medida * 50) / 20000;
+      flag_echo = 0;
+      threshold = (distancia - 15) * (200) / 3;
+      msg_dist[0] = (char)(distancia / 100 + 0x30);
+      msg_dist[1] = (char)((distancia / 10) % 10 + 0x30);
+      msg_dist[2] = (char)(distancia % 10 + 0x30);
+    }
+
     // Verifica se tem obstáculo
     // Está indo para frente quando
     char frente = (PORTC & 0b11110) ^ FRENTE;
@@ -296,6 +306,7 @@ int main()
     // Verifica se algum comando foi recebido
     if (flag_comando)
     {
+      flag_comando = 0;
       executar_comando();
     }
   }
@@ -303,69 +314,70 @@ int main()
   return 0;
 }
 
-void executar_comando() {
-  switch (comando) {
-    case 'w': // Para frente
-      PORTC = FRENTE;
-      msg = msg_frente;
-      break;
+void executar_comando()
+{
+  switch (comando)
+  {
+  case 'w': // Para frente
+    PORTC = FRENTE;
+    msg = msg_frente;
+    break;
 
-    case 'a': // Giro Anti-horario
-      PORTC = ANTIHORARIO;
-      _delay_ms(50);
-      PORTC = PARADO;
-      msg = msg_antihorario;
-      break;
+  case 'a': // Giro Anti-horario
+    PORTC = ANTIHORARIO;
+    _delay_ms(50);
+    PORTC = PARADO;
+    msg = msg_antihorario;
+    break;
 
-    case 's': // Para tras
-      PORTC = TRAS;
-      msg = msg_tras;
-      break;
+  case 's': // Para tras
+    PORTC = TRAS;
+    msg = msg_tras;
+    break;
 
-    case 'd': // Giro horario
-      PORTC = HORARIO;
-      _delay_ms(50);
-      PORTC = PARADO;
-      msg = msg_horario;
-      break;
+  case 'd': // Giro horario
+    PORTC = HORARIO;
+    _delay_ms(50);
+    PORTC = PARADO;
+    msg = msg_horario;
+    break;
 
-    case 'q': // Desliga motores
-      PORTC = PARADO;
-      msg = msg_parado;
-      break;
+  case 'q': // Desliga motores
+    PORTC = PARADO;
+    msg = msg_parado;
+    break;
 
-    case 'e': // Retorna última medida de distância
-      msg = msg_dist;
-      break;
+  case 'e': // Retorna última medida de distância
+    msg = msg_dist;
+    break;
 
-    case '7': // 70%
-      OCR2A = OCR_70_PERCENT;
-      OCR2B = OCR_70_PERCENT;
-      msg = msg_70;
-      break;
+  case '7': // 70%
+    OCR2A = OCR_70_PERCENT;
+    OCR2B = OCR_70_PERCENT;
+    msg = msg_70;
+    break;
 
-    case '8': // 80%
-      OCR2A = OCR_80_PERCENT;
-      OCR2B = OCR_80_PERCENT;
-      msg = msg_80;
-      break;
+  case '8': // 80%
+    OCR2A = OCR_80_PERCENT;
+    OCR2B = OCR_80_PERCENT;
+    msg = msg_80;
+    break;
 
-    case '0': // 100%
-      OCR2A = OCR_100_PERCENT;
-      OCR2B = OCR_100_PERCENT;
-      msg = msg_100;
-      break;
+  case '0': // 100%
+    OCR2A = OCR_100_PERCENT;
+    OCR2B = OCR_100_PERCENT;
+    msg = msg_100;
+    break;
 
-    case 'X': // Obstáculo na frente
-      PORTC = PARADO;
-      msg = msg_obstaculo;
-      break;
+  case 'X': // Obstáculo na frente
+    PORTC = PARADO;
+    msg = msg_obstaculo;
+    break;
+  default:
+    return;
   }
   // Reseta a mensagem
   msg_idx = 0;
   UDR0 = msg[msg_idx];
   contador_msg = 0;
-
-  // Reseta a flag de comando
-  flag_comando = 0;
 }
