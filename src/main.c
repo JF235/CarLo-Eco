@@ -1,5 +1,6 @@
 #include <avr/io.h>
 #include <avr/interrupt.h>
+#undef F_CPU
 #define F_CPU 16000000UL
 #include <util/delay.h>
 
@@ -289,7 +290,7 @@ int main()
       distancia = (Vsom * contador_medida * 50) / 20000;
       flag_echo = 0;
       threshold = (distancia - 15) * (200) / 3;
-      msg_dist[0] = (char)(distancia / 100 + 0x30);
+      msg_dist[0] = (char)((distancia / 100) % 10 + 0x30);
       msg_dist[1] = (char)((distancia / 10) % 10 + 0x30);
       msg_dist[2] = (char)(distancia % 10 + 0x30);
     }
