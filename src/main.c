@@ -263,7 +263,7 @@ void config(void)
   TCCR2B = 0b00000011;
   TCCR2A = 0b10100011;
   OCR2A = OCR_70_PERCENT;
-  OCR2B = OCR_70_PERCENT;
+  OCR2B = OCR_70_PERCENT-12;
 
   // Configuração do Pino TRIG (A0)
   DDRC |= 1;
@@ -353,19 +353,19 @@ void executar_comando()
 
   case '7': // 70%
     OCR2A = OCR_70_PERCENT;
-    OCR2B = OCR_70_PERCENT;
+    OCR2B = OCR_70_PERCENT - 12; // Roda direita
     msg = msg_70;
     break;
 
   case '8': // 80%
     OCR2A = OCR_80_PERCENT;
-    OCR2B = OCR_80_PERCENT;
+    OCR2B = OCR_80_PERCENT - 12;
     msg = msg_80;
     break;
 
   case '0': // 100%
     OCR2A = OCR_100_PERCENT;
-    OCR2B = OCR_100_PERCENT;
+    OCR2B = OCR_100_PERCENT - 12;
     msg = msg_100;
     break;
 
