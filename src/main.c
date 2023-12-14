@@ -1,17 +1,12 @@
+/* EA871 - PROJETO FINAL
+Feito por João Felipe (174140) e Lucas Oliver (256793).
+*/
+
 #undef F_CPU
 #define F_CPU 16000000UL
 #include <avr/io.h>
 #include <avr/interrupt.h>
 #include <util/delay.h>
-
-// Typedefs, por conforto.
-typedef short int16_t;
-typedef int int32_t;
-typedef long int64_t;
-typedef unsigned char uint8_t;
-typedef unsigned short uint16_t;
-typedef unsigned int uint32_t;
-typedef unsigned long uint64_t;
 
 // Velocidade do som para cálculo da distância.
 #define VELOCIDADE_SOM 343U // Em m/s.
@@ -25,9 +20,9 @@ typedef unsigned long uint64_t;
 #define ANTIHORARIO 0b00010100
 #define MUDAR_DIRECAO(dir) PORTC = (PORTC & 0b11100001) | dir // Muda a direção do carrinho.
 #define ESTA_MOVENDO(dir) ((PORTC & 0b00011110) == dir) // Verifica a direção atual do movimento do carrinho.
-#define DELAY_GIRO_MS 50 // Tempo de duração dos comandos HORARIO e ANTIHORARIO
+#define DELAY_GIRO_MS 50 // Tempo de duração dos comandos HORARIO e ANTIHORARIO.
 
-// Largura de pulso para cada porcentagem
+// Largura de pulso para cada porcentagem.
 #define OCR_70_PERCENT 178
 #define OCR_80_PERCENT 204
 #define OCR_100_PERCENT 255
@@ -71,18 +66,18 @@ volatile char comando = COM_PARADO; // Último comando recebido.
 
 // Controle de mensagem.
 volatile char *msg = MSG_PARADO; // Buffer com a mensagem a ser enviada pela UART.
-volatile uint32_t msg_idx = 0; // Índice do último caractére enviado.
+volatile uint8_t msg_idx = 0; // Índice do último caractére enviado.
 volatile uint32_t contador_msg = 0; // Contagem de tempo para o envio da mensagem.
 
 // Controle do medidor.
 volatile uint8_t flag_echo = 0; // Flag: 1 se houver uma nova medida de echo, 0 caso contrário.
-volatile uint16_t distancia = 0; // Distância medida pelo sensor, em centímetros.
-volatile uint64_t contador_medida = 0; // Contagem de tempo de duração do sinal ECHO.
+volatile uint32_t distancia = 0; // Distância medida pelo sensor, em centímetros.
+volatile uint32_t contador_medida = 0; // Contagem de tempo de duração do sinal ECHO.
 volatile uint32_t contador_dist = 0; // Contagem de tempo para medida de distancia.
 
 // Controle do LED.
-volatile uint64_t periodo_led = 0; // Período do piscar do LED em função da distância. Calculado periodicamente.
-volatile uint64_t contador_led = 0; // Contagem de tempo do piscar do LED.
+volatile uint32_t periodo_led = 0; // Período do piscar do LED em função da distância. Calculado periodicamente.
+volatile uint32_t contador_led = 0; // Contagem de tempo do piscar do LED.
 
 /* CONFIGURAÇÃO PWM
 =============================================
@@ -269,7 +264,7 @@ int main() {
       // Executar se houver uma nova medida de echo.
       distancia = (VELOCIDADE_SOM * contador_medida * 50) / 20000; // Calcula distância.
       flag_echo = 0; // Desabilita flag do echo.
-      threshold = (distancia - 15) * (200) / 3; // Calcula o período do piscar do LED.
+      periodo_led = (distancia - 15) * (200) / 3; // Calcula o período do piscar do LED.
 
       // Coloca a medida de distância na string MSG_DIST.
       MSG_DIST[0] = (char)((distancia / 100) % 10 + 0x30); // Centenas.
