@@ -1,22 +1,88 @@
-#include <avr/io.h>
-#include <avr/interrupt.h>
 #undef F_CPU
 #define F_CPU 16000000UL
+#include <avr/io.h>
+#include <avr/interrupt.h>
 #include <util/delay.h>
 
-#define Vsom 343
+// Typedefs, por conforto.
+typedef short int16_t;
+typedef int int32_t;
+typedef long int64_t;
+typedef unsigned char uint8_t;
+typedef unsigned short uint16_t;
+typedef unsigned int uint32_t;
+typedef unsigned long uint64_t;
 
-// Acionamento dos motores
-#define PARADO 0b00000000
-#define FRENTE 0b00011000
-#define TRAS 0b00000110
-#define HORARIO 0b00001010
+// Velocidade do som para cálculo da distância.
+#define VELOCIDADE_SOM 343U // Em m/s.
+#define DIST_MINIMA 25U // Em cm.
+
+// Acionamento dos motores.
+#define PARADO      0b00000000
+#define FRENTE      0b00011000
+#define TRAS        0b00000110
+#define HORARIO     0b00001010
 #define ANTIHORARIO 0b00010100
+#define MUDAR_DIRECAO(dir) PORTC = (PORTC & 0b11100001) | dir // Muda a direção do carrinho.
+#define ESTA_MOVENDO(dir) ((PORTC & 0b00011110) == dir) // Verifica a direção atual do movimento do carrinho.
+#define DELAY_GIRO_MS 50 // Tempo de duração dos comandos HORARIO e ANTIHORARIO
 
 // Largura de pulso para cada porcentagem
 #define OCR_70_PERCENT 178
 #define OCR_80_PERCENT 204
 #define OCR_100_PERCENT 255
+
+// Constantes somadas às larguras de pulso para calibração adequada das rodas.
+#define OCR_RODA_ESQ_BIAS 0
+#define OCR_RODA_DIR_BIAS 12
+
+// Macro para definir largura de pulso.
+#define MUDAR_VELOCIDADE(power) \
+  OCR2A = power - OCR_RODA_ESQ_BIAS;\
+  OCR2B = power - OCR_RODA_DIR_BIAS
+
+// Comandos de entrada.
+#define COM_FRENTE      'w'
+#define ERR_OBSTACULO   'X'
+#define COM_TRAS        's'
+#define COM_HORARIO     'd'
+#define COM_ANTIHORARIO 'a'
+#define COM_PARADO      'q'
+#define COM_70          '7'
+#define COM_80          '8'
+#define COM_100         '0'
+#define COM_DIST        'e'
+
+// Mensagens.
+char MSG_FRENTE[]       = "FRENTE\n";
+char MSG_OBSTACULO[]    = "OBSTACULO\n";
+char MSG_TRAS[]         = "TRAS\n";
+char MSG_ANTIHORARIO[]  = "ANTI-HORARIO\n";
+char MSG_HORARIO[]      = "HORARIO\n";
+char MSG_PARADO[]       = "PARADO\n";
+char MSG_70[]           = "Velocidade 70%\n";
+char MSG_80[]           = "Velocidade 80%\n";
+char MSG_100[]          = "Velocidade 100%\n";
+char MSG_DIST[]         = "DDDcm\n";
+
+// Variáveis de controle de comando.
+volatile uint8_t flag_comando = 0; // Flag: 1 se for recebido um comando, 0 caso contrário.
+volatile char comando = COM_PARADO; // Último comando recebido.
+
+// Controle de mensagem.
+volatile char *msg = MSG_PARADO; // Buffer com a mensagem a ser enviada pela UART.
+volatile uint32_t msg_idx = 0; // Índice do último caractére enviado.
+volatile uint32_t contador_msg = 0; // Contagem de tempo para o envio da mensagem.
+
+// Controle do medidor.
+volatile uint8_t flag_echo = 0; // Flag: 1 se houver uma nova medida de echo, 0 caso contrário.
+volatile uint16_t distancia = 0; // Distância medida pelo sensor, em centímetros.
+volatile uint64_t contador_medida = 0; // Contagem de tempo de duração do sinal ECHO.
+volatile uint32_t contador_dist = 0; // Contagem de tempo para medida de distancia.
+
+// Controle do LED.
+volatile uint64_t periodo_led = 0; // Período do piscar do LED em função da distância. Calculado periodicamente.
+volatile uint64_t contador_led = 0; // Contagem de tempo do piscar do LED.
 
 /* CONFIGURAÇÃO PWM
 =============================================
@@ -36,16 +102,15 @@ Ajuste da porcentagem alterando o valor de OCRA/B
 
 Fast PWM com TOP = 0xFF   (WGM = 011)
 Modo não invertido        (COM2A/B = 10)
-  TCCR2A = [COM2A(1:0) COM2B(1:0) - - WGM2(1:0)]
+  TCCR2A = [COM2A[1:0] COM2B[1:0] - - WGM2[1:0]]
   TCCR2A = 0b10100011;
 
 Prescaler 32              (CS2 = 0b011)
 Sem Force Output Compare  (FOC2A/B = 0)
-  TCCR2B = [FOC2A FOC2B - - WGM22 CS2(2:0)]
-  TCCR2B = 0b11;
+  TCCR2B = [FOC2A FOC2B - - WGM22 CS2[2:0]]
+  TCCR2B = 0b00000011;
 =============================================
 */
-
 /* CONFIGURAÇÃO TEMPORIZADOR0
 =============================================
 Tempo entre interrupções
@@ -71,8 +136,7 @@ Output Compare A Int      (OCIE0A = 1)
 OCR0A = 99;
 =============================================
 */
-
-/* UART CONFIG
+/* CONFIGURAÇÃO UART
 =============================================
 - double-speed desativado
 - multi-processador desabilitado;
@@ -99,285 +163,185 @@ UBRR0 = 103
 =============================================
 */
 
-// Mensagens
-char msg_frente[] = "FRENTE\n";
-char msg_obstaculo[] = "OBSTACULO\n";
-char msg_tras[] = "TRAS\n";
-char msg_antihorario[] = "ANTI-HORARIO\n";
-char msg_horario[] = "HORARIO\n";
-char msg_parado[] = "PARADO\n";
-char msg_70[] = "Velocidade 70%\n";
-char msg_80[] = "Velocidade 80%\n";
-char msg_100[] = "Velocidade 100%\n";
-char msg_dist[] = "DDDcm\n";
+// Função de execução de comando.
+void executarComando();
 
-// Variáveis de controle de comando
-volatile unsigned char flag_comando = 0; // 1 quando tem comando para ser executado
-volatile char comando = 'q';
-
-// Controle de mensagem
-volatile char *msg = msg_parado;        // buffer com a mensagem
-volatile unsigned int contador_msg = 0; // base de tempo para mensagem
-volatile unsigned int msg_idx = 0;      // índice do último caractere enviado
-
-// Controle do medidor
-volatile unsigned long distancia = 0;       // distância em centímetros
-volatile unsigned long contador_medida = 0; // contagens durante a medida de distancia
-volatile unsigned int contador_dist = 0;    // base de tempo para medida de distancia
-volatile unsigned char flag_echo = 0;
-
-// Controle do Led
-volatile unsigned long contador_led = 0;
-
-volatile unsigned long threshold = 0;
-
-void executar_comando();
-
-// Interrupção de PINCHANGE (ECHO)
-ISR(PCINT2_vect)
-{
-  char estado_echo = (PIND & 0b100) >> 2;
-  if (estado_echo)
-  {
-    contador_medida = 0;
-  }
-  else
-  {
-    flag_echo = 1;
-  }
+// Interrupção de PIN CHANGE 2.
+ISR(PCINT2_vect) {
+  // Acionada quando é detectada uma mudança no sinal ECHO do sensor de distância.
+  if (PIND & 0b00000100) contador_medida = 0; // Caso ECHO seja 1, reinicia a contagem de tempo do echo antes da medida.
+  else flag_echo = 1; // Caso echo seja 0, habilita a flag de echo.
 }
 
-// Interrupção do receptor UART
-ISR(USART_RX_vect)
-{
-  // Recebeu dado
-  if (!flag_comando)
-  {
-    // Ativa a flag e salva o comando
+// Interrupção do receptor UART.
+ISR(USART_RX_vect) {
+  if (!flag_comando) {
+    // Ativa a flag e salva o comando.
     flag_comando = 1;
     comando = UDR0;
   }
 }
 
-// Interrupção do transmissor UART
-ISR(USART_TX_vect)
-{
-  // Dado transmitido
-  if (msg[msg_idx + 1] == '\0')
-  {
-    // Fim da string, reseta o índice
-    msg_idx = 0;
-  }
-  else
-  {
-    // Envia o proximo caractere
-    // Nova interrupção será gerada em seguida
-    msg_idx++;
+// Interrupção do transmissor UART.
+ISR(USART_TX_vect) {
+  if (msg[++msg_idx] != '\0') UDR0 = msg[msg_idx];
+  else msg_idx = 0;
+}
+
+// Interrução do temporizador. Ocorre a cada 50us.
+ISR(TIMER0_COMPA_vect) {
+  if (!flag_echo) ++contador_medida; // Incrementa a contagem de tempo do echo quando estiver sendo medido.
+  PORTC &= ~(0b00000001); // Desabilita TRIG.
+
+  // Se 1s tiver se passado desde a última mensagem, reenvie a mensagem atual e reinicie a contagem.
+  if (++contador_msg >= 20000U) { // 50us * 20000 = 1000000us = 1s
     UDR0 = msg[msg_idx];
+    contador_msg = 0; // Reinicia a contagem de tempo da mensagem.
+  }
+
+  // Aciona TRIG do sensor de distância a cada 200ms.
+  if (++contador_dist >= 4000U) { // 50us * 4000 = 200000us = 200ms
+    PORTC |= 0b00000001;
+    contador_dist = 0; // Reinicia contagem de tempo da medida de distância.
+  }
+
+  // Pisca o LED de acordo com a medida de distância.
+  if (++contador_led >= periodo_led) {
+    /* Relação distância-frequência:
+      25cm -> 30hz
+      45cm -> 10hz
+      75cm -> 5hz
+      315cm -> 1hz 
+    */
+    if (distancia <= DIST_MINIMA) PORTC |= 0b00100000; // Se a distância medida for menor que a distância mínima, mantenha o LED aceso.
+    else PORTC ^= 0b00100000; // Caso contrário, inverta o sinal do LED.
+    contador_led = 0; // Reinicia a contagem de tempo do LED.
   }
 }
 
-// Interrução do temporizador
-ISR(TIMER0_COMPA_vect)
-{
-  // Entra aqui a cada 50 us
-
-  // Base de tempo da mensagem
-  contador_msg++;
-
-  // Base de tempo da medida de dist.
-  contador_dist++;
-  if (!flag_echo)
-  {
-    contador_medida++;
-  }
-  PORTC &= ~(0b1); // Desliga trigger
-
-  // Base de tempo para o LED
-  contador_led++;
-
-  if (contador_msg >= 20000)
-  {
-    // Entra aqui a cada 1s
-    // Envia a mensagem
-    UDR0 = msg[msg_idx];
-    contador_msg = 0;
-  }
-  if (contador_dist >= 4000)
-  {
-    // Entra aqui a cada 200ms
-    // Seta trigger
-    PORTC |= 1;
-    contador_dist = 0;
-  }
-  if (contador_led >= threshold)
-  {
-    // 25cm -> 30hz
-    // 45cm -> 10hz
-    // 75cm -> 5hz
-    // 315cm -> 1hz
-
-    if (distancia < 20)
-    {
-      // Deixa o bit aceso
-      PORTC |= 0b100000;
-    }
-    else
-    {
-      // Toggle bit do led
-      PORTC ^= 0b100000;
-    }
-    contador_led = 0;
-  }
-}
-
-void config(void)
-{
+void config() {
   cli();
 
-  // Configuração GPIO (Led)
-  // Pino A5
-  DDRC |= 0b00100000;
-
-  // Configuração GPIO (Motor)
-  // A1, A2, A3 e A4 controlam o motor
-  DDRC |= 0b00011110;
-  PORTC = PARADO;
-  // PWM do motor (pinos 3 e 11)
-  DDRD |= 0b00001000;
+  /* CONFIGURAÇÕES GPIO
+  DDRC:
+  - [5]: LED 
+  - [4:1]: Sinal do motor
+  - [0]: TRIG (sensor de distância)
+  DDRB[3] (OC2A): Ativação do motor (roda esquerda)
+  DDRD[3] (OC2B): Ativação do motor (roda direita)
+  */
+  DDRC |= 0b00111111;
   DDRB |= 0b00001000;
+  DDRD |= 0b00001000;
+  MUDAR_DIRECAO(PARADO);
 
-  // Configurações da UART
-  UCSR0A = 0;
+  // Configurações da UART.
+  UCSR0A = 0b00000000;
   UCSR0B = 0b11011000;
   UCSR0C = 0b00000110;
   UBRR0L = 103;
   UBRR0H = 0;
 
-  // Temporizador CTC (50us entre interrupções)
+  // Temporização do sistema com Timer/Counter0 em modo CTC (50us entre interrupções).
   OCR0A = 99;
   TIMSK0 = 0b00000010;
   TCCR0B = 0b00000010;
   TCCR0A = 0b00000010;
 
-  // Configuração PWM
+  // Configuração do PWM com Timer/Counter2.
   TCCR2B = 0b00000011;
   TCCR2A = 0b10100011;
-  OCR2A = OCR_70_PERCENT;
-  OCR2B = OCR_70_PERCENT-12;
+  MUDAR_VELOCIDADE(OCR_70_PERCENT);
 
-  // Configuração do Pino TRIG (A0)
-  DDRC |= 1;
-
-  // Configuração do Pino ECHO (2)
-  // PCINT18 ativada
-  PCICR = 0b100;
-  PCMSK2 = 0b100;
+  // Configuração da interrupção PCINT2
+  PCICR = 0b00000100; // Habilita máscara do pino PCINT18. 
+  PCMSK2 = 0b00000100; // Habilita interrupção PCINT2.
 
   sei();
 }
 
-int main()
-{
+int main() {
 
   config();
 
-  while (1)
-  {
-    if (flag_echo)
-    {
-      // Terminou de medir a distância
-      distancia = (Vsom * contador_medida * 50) / 20000;
-      flag_echo = 0;
-      threshold = (distancia - 15) * (200) / 3;
-      msg_dist[0] = (char)((distancia / 100) % 10 + 0x30);
-      msg_dist[1] = (char)((distancia / 10) % 10 + 0x30);
-      msg_dist[2] = (char)(distancia % 10 + 0x30);
+  while (1) {
+    if (flag_echo) {
+      // Executar se houver uma nova medida de echo.
+      distancia = (VELOCIDADE_SOM * contador_medida * 50) / 20000; // Calcula distância.
+      flag_echo = 0; // Desabilita flag do echo.
+      threshold = (distancia - 15) * (200) / 3; // Calcula o período do piscar do LED.
+
+      // Coloca a medida de distância na string MSG_DIST.
+      MSG_DIST[0] = (char)((distancia / 100) % 10 + 0x30); // Centenas.
+      MSG_DIST[1] = (char)((distancia / 10) % 10 + 0x30); // Dezenas.
+      MSG_DIST[2] = (char)(distancia % 10 + 0x30); // Unidades.
     }
 
-    // Verifica se tem obstáculo
-    // Está indo para frente quando
-    char frente = (PORTC & 0b11110) ^ FRENTE;
-    if (frente == 0 && distancia <= 25 && comando != 'X')
-    {
-      comando = 'X';
-      flag_comando = 1;
+    // Se estiver andando para frente e for detectado um obstáculo próximo, mude o comando para ERR_OBSTACULO.
+    if (ESTA_MOVENDO(FRENTE) && distancia <= DIST_MINIMA && comando != ERR_OBSTACULO) {
+      comando = ERR_OBSTACULO;
+      flag_comando = 1; // Aciona processamento de comandos.
     }
 
-    // Verifica se algum comando foi recebido
-    if (flag_comando)
-    {
+    // Verifica se algum comando foi recebido.
+    if (flag_comando) {
       flag_comando = 0;
-      executar_comando();
+      executarComando();
     }
   }
 
   return 0;
 }
 
-void executar_comando()
-{
-  switch (comando)
-  {
-  case 'w': // Para frente
-    PORTC = FRENTE;
-    msg = msg_frente;
-    break;
-
-  case 'a': // Giro Anti-horario
-    PORTC = ANTIHORARIO;
-    _delay_ms(50);
-    PORTC = PARADO;
-    msg = msg_antihorario;
-    break;
-
-  case 's': // Para tras
-    PORTC = TRAS;
-    msg = msg_tras;
-    break;
-
-  case 'd': // Giro horario
-    PORTC = HORARIO;
-    _delay_ms(50);
-    PORTC = PARADO;
-    msg = msg_horario;
-    break;
-
-  case 'q': // Desliga motores
-    PORTC = PARADO;
-    msg = msg_parado;
-    break;
-
-  case 'e': // Retorna última medida de distância
-    msg = msg_dist;
-    break;
-
-  case '7': // 70%
-    OCR2A = OCR_70_PERCENT;
-    OCR2B = OCR_70_PERCENT - 12; // Roda direita
-    msg = msg_70;
-    break;
-
-  case '8': // 80%
-    OCR2A = OCR_80_PERCENT;
-    OCR2B = OCR_80_PERCENT - 12;
-    msg = msg_80;
-    break;
-
-  case '0': // 100%
-    OCR2A = OCR_100_PERCENT;
-    OCR2B = OCR_100_PERCENT - 12;
-    msg = msg_100;
-    break;
-
-  case 'X': // Obstáculo na frente
-    PORTC = PARADO;
-    msg = msg_obstaculo;
-    break;
-  default:
-    return;
+void executarComando() {
+  switch (comando) {
+    case COM_FRENTE: // COMANDO: Para frente.
+      MUDAR_DIRECAO(FRENTE);
+      msg = MSG_FRENTE;
+      break;
+    case COM_ANTIHORARIO: // COMANDO: Giro antihorário.
+      MUDAR_DIRECAO(ANTIHORARIO);
+      _delay_ms(DELAY_GIRO_MS);
+      MUDAR_DIRECAO(PARADO);
+      msg = MSG_ANTIHORARIO;
+      break;
+    case COM_TRAS: // COMANDO: Para trás.
+      MUDAR_DIRECAO(TRAS);
+      msg = MSG_TRAS;
+      break;
+    case COM_HORARIO: // COMANDO: Giro horário.
+      MUDAR_DIRECAO(HORARIO);
+      _delay_ms(DELAY_GIRO_MS);
+      MUDAR_DIRECAO(PARADO);
+      msg = MSG_HORARIO;
+      break;
+    case COM_PARADO: // COMANDO: Parar movimento.
+      MUDAR_DIRECAO(PARADO);
+      msg = MSG_PARADO;
+      break;
+    case COM_DIST: // COMANDO: Mostrar distância.
+      msg = MSG_DIST;
+      break;
+    case COM_70: // COMANDO: Usar 70% de velocidade.
+      MUDAR_VELOCIDADE(OCR_70_PERCENT);
+      msg = MSG_70;
+      break;
+    case COM_80: // COMANDO: Usar 80% de velocidade.
+      MUDAR_VELOCIDADE(OCR_80_PERCENT);
+      msg = MSG_80;
+      break;
+    case COM_100: // COMANDO: Usar 100% de velocidade.
+      MUDAR_VELOCIDADE(OCR_100_PERCENT);
+      msg = MSG_100;
+      break;
+    case ERR_OBSTACULO: // ERRO: Obstáculo em frente! Parar movimento.
+      MUDAR_DIRECAO(PARADO);
+      msg = MSG_OBSTACULO;
+      break;
+    default: // Em caso de comando inválido, retornar.
+      return;
   }
-  // Reseta a mensagem
+  // Reinicia a mensagem e o zera a contagem de tempo desde a última mensagem.
   msg_idx = 0;
   UDR0 = msg[msg_idx];
   contador_msg = 0;
