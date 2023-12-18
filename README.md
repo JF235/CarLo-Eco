@@ -2,7 +2,7 @@
 
 CarLo-Eco (Carro com Localização baseada em Eco) é um projeto de carrinho que utiliza um sensor de distância para evitar obstáculos. O carrinho é controlado por um microcontrolador Arduino, com ATmega328P. 
 
-![carrinho](media/carrinho.jpg)
+<img src="media/carrinho.jpg" alt="carrinho" style="width: 50%;">
 
 ## Simulação
 
